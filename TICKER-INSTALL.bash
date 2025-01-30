@@ -59,10 +59,7 @@ TIME=$(date '+%H:%M:%S')
 CURRENT_TIMESTAMP=$(date +%s)
 
 # Are we running on Ubuntu OS?
-IS_UBUNTU=$(cat /etc/os-release | grep "PRETTY_NAME" | grep "Ubuntu")
-
-# Are we already using lightdm, as the display manager?
-LIGHTDM_DISPLAY=$(cat /etc/X11/default-display-manager | grep "lightdm")
+IS_UBUNTU=$(cat /etc/os-release | grep -i "ubuntu")
 
 
 # If a symlink, get link target for script location
@@ -378,7 +375,7 @@ fi
 
 
 # Make sure automatic suspend / sleep is disabled
-if [ -f "/etc/debian_version" ]; then
+if [ ! -f "${HOME}/.sleep_disabled.dat" ]; then
 
 echo "${red}We need to make sure your system will NOT AUTO SUSPEND / SLEEP, or your app server could stop running.${reset}"
 
@@ -392,31 +389,13 @@ echo "${reset} "
     echo "${cyan}Disabling auto suspend / sleep...${reset}"
     echo " "
     
-    sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target > /dev/null 2>&1
-	   
-    else
-
-    echo " "
-    echo "${green}Skipping...${reset}"
-    echo " "
+    echo -e "ran" > ${HOME}/.sleep_disabled.dat
     
-    fi
-
-elif [ -f "/etc/redhat-release" ]; then
-
-echo "${red}We need to make sure your system will NOT AUTO SUSPEND / SLEEP, or your app server could stop running.${reset}"
-
-echo "${yellow} "
-read -n1 -s -r -p $"PRESS F to fix this (disables auto suspend / sleep), OR any other key to skip fixing..." key
-echo "${reset} "
-
-    if [ "$key" = 'f' ] || [ "$key" = 'F' ]; then
-
-    echo " "
-    echo "${cyan}Disabling auto suspend / sleep...${reset}"
-    echo " "
-    
-    sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 > /dev/null 2>&1
+         if [ -f "/etc/debian_version" ]; then
+         sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target > /dev/null 2>&1
+         elif [ -f "/etc/redhat-release" ]; then
+         sudo -u gdm dbus-run-session gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-timeout 0 > /dev/null 2>&1
+         fi
 	   
     else
 
@@ -636,9 +615,6 @@ JQ_PATH=$(get_app_path "jq")
 # less
 LESS_PATH=$(get_app_path "less")
 
-# lightdm (NEEDED TO BE USED AS THE DISPLAY MANAGER, FOR LXDE / AUTOBOOT)
-LIGHTDM_PATH=$(get_app_path "lightdm")
-
 # sed
 SED_PATH=$(get_app_path "sed")
 
@@ -812,7 +788,7 @@ echo " "
 
 # If we are NOT running raspi os, AND lxde desktop IS NOT INSTALLED,
 # then we offer the option to install LXDE, AND WE SET THE DISPLAY MANAGER TO LIGHTDM (IF NOT ALREADY SET)
-if [ "$LIGHTDM_PATH" != "" ] && [ ! -f /usr/bin/raspi-config ] && [ ! -d /etc/xdg/lxsession ]; then
+if [ ! -f /usr/bin/raspi-config ] && [ ! -d /etc/xdg/lxsession ]; then
 
 echo "${red}WE NEED TO MAKE SURE LXDE #AND# LIGHTDM ARE SETUP, IF YOU WANT THE TICKER TO #AUTOMATICALLY RUN ON SYSTEM STARTUP# / REBOOT."
 echo " "
@@ -831,9 +807,15 @@ echo " "
             echo "${cyan}Installing LXDE desktop and required components, please wait...${reset}"
             echo " "
 
-            $PACKAGE_INSTALL lxde -y
+            $PACKAGE_INSTALL lightdm lxde -y
             
             sleep 3
+
+            # lightdm (NEEDED TO BE USED AS THE DISPLAY MANAGER, FOR LXDE / AUTOBOOT)
+            LIGHTDM_PATH=$(get_app_path "lightdm")
+
+            # Are we already using lightdm, as the display manager?
+            LIGHTDM_DISPLAY=$(cat /etc/X11/default-display-manager | grep "lightdm")
             
             echo " "
             echo "${cyan}LXDE desktop has been installed.${reset}"
@@ -857,20 +839,52 @@ echo " "
                 fi
                 
             
+            # CROSS-PLATFORM LIGHTDM SETUP COMMANDS...
+            
+            echo " "
+            echo "${cyan}Configuring LIGHTDM display manager, please wait...${reset}"
+            echo " "
+            
             # Enable GUI on boot
             systemctl set-default graphical
+            echo " "
+            
+            sleep 3
 		  
 		  # Assure lightdm is being used
 		  dpkg-reconfigure lightdm
+            echo " "
+            
+            sleep 3
                 
             # Assure a graphical TARGET is set, or system MAY hang on boot
             # https://askubuntu.com/questions/74551/lightdm-not-starting-on-boot/939995#939995
             rm /etc/systemd/system/default.target
             
-            echo " "
+            sleep 3
+            
             systemctl set-default graphical.target
             echo " "
             
+            sleep 3
+                        
+            # DISABLE gdm at boot
+            sudo systemctl disable gdm.service
+            echo " "
+            
+            sleep 3
+            
+            echo " "
+            echo "${cyan}Configuring LIGHTDM display manager is complete.${reset}"
+            echo " "
+          
+            # ENABLE lightdm at boot
+            # DEBUG: sudo lightdm –-test-mode --debug
+            # DEBUG: journalctl -b -u lightdm.service
+            sudo systemctl enable lightdm.service
+            
+            sleep 3
+     
             break
            elif [ "$opt" = "skip" ]; then
             echo " "
@@ -880,7 +894,14 @@ echo " "
     done
 
 
-elif [ "$LIGHTDM_PATH" == "" ]; then
+fi
+
+
+# lightdm (NEEDED TO BE USED AS THE DISPLAY MANAGER, FOR LXDE / AUTOBOOT)
+LIGHTDM_PATH=$(get_app_path "lightdm")
+
+
+if [ "$LIGHTDM_PATH" == "" ]; then
                 
                 echo "${red}'lightdm' (display manager) could NOT be found or installed. PLEASE INSTALL MANUALLY, OR TRY A DIFFERENT OPERATING SYSTEM (Ubuntu, Debian, RaspberryPi OS, Armbian, etc)."
                
@@ -894,7 +915,7 @@ elif [ "$LIGHTDM_PATH" == "" ]; then
                     echo " "
                     exit
                     fi
-
+                    
 fi
 
 
@@ -972,20 +993,46 @@ echo " "
             
                 # Auto-login LXDE logic...
                 
-                if [ -d /usr/share/lightdm/lightdm.conf.d ]; then
-                LIGHTDM_CONF_DIR="/usr/share/lightdm/lightdm.conf.d"
-                CHECK_LIGHTDM_D=$(ls /usr/share/lightdm/lightdm.conf.d)
-                CHECK_LIGHTDM_D=$(echo "${CHECK_LIGHTDM_D}" | xargs) # trim whitespace
-                elif [ -d /etc/lightdm/lightdm.conf.d ]; then
+                
+                # FIRST LOCATION CHECK, FOR MULTI-FILE CONFIG DIRECTORY SETUP
+                if [ -d /etc/lightdm/lightdm.conf.d ]; then
+                
                 LIGHTDM_CONF_DIR="/etc/lightdm/lightdm.conf.d"
+                
                 CHECK_LIGHTDM_D=$(ls /etc/lightdm/lightdm.conf.d)
                 CHECK_LIGHTDM_D=$(echo "${CHECK_LIGHTDM_D}" | xargs) # trim whitespace
-                else
-                CHECK_LIGHTDM_D=""
+                
+                # Find the PROPER config file in the /lightdm.conf.d/ directory
+			 LIGHTDM_CONFIG_FILE=$(grep -r 'user-session' $LIGHTDM_CONF_DIR | awk -F: '{print $1}')
+                LIGHTDM_CONFIG_FILE=$(echo "${LIGHTDM_CONFIG_FILE}" | xargs) # trim whitespace
+                
                 fi
                 
                 
-                if [ ! -f /etc/lightdm/lightdm.conf ] && [ -z "$CHECK_LIGHTDM_D" ]; then
+                # SECONDARY POSSIBLE LOCATION, FOR MULTI-FILE CONFIG DIRECTORY SETUP
+                if [ -z "$LIGHTDM_CONFIG_FILE" ] && [ -d /usr/share/lightdm/lightdm.conf.d ]; then
+                
+                LIGHTDM_CONF_DIR="/usr/share/lightdm/lightdm.conf.d"
+                
+                CHECK_LIGHTDM_D=$(ls /usr/share/lightdm/lightdm.conf.d)
+                CHECK_LIGHTDM_D=$(echo "${CHECK_LIGHTDM_D}" | xargs) # trim whitespace
+                
+                # Find the PROPER config file in the /lightdm.conf.d/ directory
+			 LIGHTDM_CONFIG_FILE=$(grep -r 'user-session' $LIGHTDM_CONF_DIR | awk -F: '{print $1}')
+                LIGHTDM_CONFIG_FILE=$(echo "${LIGHTDM_CONFIG_FILE}" | xargs) # trim whitespace
+                
+                fi
+                
+                
+                # DEFAULT LOCATION, IF NO MULTI-FILE CONFIG DIRECTORY SETUP DETECTED
+                if [ -z "$LIGHTDM_CONFIG_FILE" ]; then
+                LIGHTDM_CONFIG_FILE="/etc/lightdm/lightdm.conf"
+                fi
+                
+                
+                if [ ! -f "$LIGHTDM_CONFIG_FILE" ]; then
+                
+                echo "${cyan}LIGHTDM config NOT detected, CREATING at: ${LIGHTDM_CONFIG_FILE}${reset}"
                 
                 
 # Don't nest / indent, or it could malform the settings            
@@ -999,46 +1046,14 @@ EOF
 
 			 # Setup LXDE to run at boot
 				
-			 touch /etc/lightdm/lightdm.conf
+			 touch $LIGHTDM_CONFIG_FILE
 					
-			 echo -e "$LXDE_AUTO_LOGIN" > /etc/lightdm/lightdm.conf
+			 echo -e "$LXDE_AUTO_LOGIN" > $LIGHTDM_CONFIG_FILE
+			 
 			    
-			    
-			 elif [ -f /etc/lightdm/lightdm.conf ]; then
-			    
-			 DETECT_AUTOLOGIN=$(sudo sed -n '/autologin-user=/p' /etc/lightdm/lightdm.conf)
-			    
-			 DETECT_AUTOLOGIN_SESSION=$(sudo sed -n '/autologin-session=/p' /etc/lightdm/lightdm.conf)
-			    
-			    
-			        if [ "$DETECT_AUTOLOGIN" != "" ]; then 
-                       sed -i "s/#autologin-user=.*/autologin-user=${APP_USER}/g" /etc/lightdm/lightdm.conf
-                       sleep 2
-                       sed -i "s/autologin-user=.*/autologin-user=${APP_USER}/g" /etc/lightdm/lightdm.conf
-                       elif [ "$DETECT_AUTOLOGIN" == "" ]; then 
-                       sudo bash -c "echo 'autologin-user=${APP_USER}' >> /etc/lightdm/lightdm.conf"
-			        fi
-			        
+			 elif [ -f "$LIGHTDM_CONFIG_FILE" ]; then
                 
-                sleep 2
-			    
-			    
-			        if [ "$DETECT_AUTOLOGIN_SESSION" != "" ]; then 
-                       sed -i "s/#autologin-session=.*/autologin-session=${LXDE_PROFILE}/g" /etc/lightdm/lightdm.conf
-                       sleep 2
-                       sed -i "s/autologin-session=.*/autologin-session=${LXDE_PROFILE}/g" /etc/lightdm/lightdm.conf
-                       elif [ "$DETECT_AUTOLOGIN_SESSION" == "" ]; then 
-                       sudo bash -c "echo 'autologin-session=${LXDE_PROFILE}' >> /etc/lightdm/lightdm.conf"
-			        fi
-                
-                sed -i "s/user-session=.*/user-session=${LXDE_PROFILE}/g" /etc/lightdm/lightdm.conf
-                
-                
-                elif [ -n "$CHECK_LIGHTDM_D" ]; then
-                
-                # Find the PROPER config file in the /lightdm.conf.d/ directory
-			 LIGHTDM_CONFIG_FILE=$(grep -r 'user-session' $LIGHTDM_CONF_DIR | awk -F: '{print $1}')
-                LIGHTDM_CONFIG_FILE=$(echo "${LIGHTDM_CONFIG_FILE}" | xargs) # trim whitespace
+                echo "${cyan}LIGHTDM config detected at: $LIGHTDM_CONFIG_FILE${reset}"
 			    
 			 DETECT_AUTOLOGIN=$(sudo sed -n '/autologin-user=/p' $LIGHTDM_CONFIG_FILE)
 			    
@@ -1075,9 +1090,6 @@ EOF
             
             sleep 2
             
-            # Enable GUI on boot
-            systemctl set-default graphical
-            
             echo " "
             echo "${green}LXDE desktop auto-login has been configured.${reset}"
             echo " "
@@ -1089,14 +1101,13 @@ EOF
                 fi
             
             
-            
-            
             break
            elif [ "$opt" = "skip" ]; then
             echo " "
             echo "${green}Skipping LXDE desktop setup...${reset}"
             break
            fi
+           
     done
     
 
@@ -1134,9 +1145,14 @@ select opt in $OPTIONS; do
 				     # FORCE UBUNTU SNAP INSTALLS
 				     # (included snaps can be messed up, especially on Ubuntu Armbian)
 				     if [ "$IS_UBUNTU" != "" ]; then
+				     
 				     $UBUNTU_SNAP_INSTALL firefox
+				     
 				     $UBUNTU_SNAP_INSTALL chromium
-				     $UBUNTU_SNAP_INSTALL epiphany
+				     
+				     # SEEMS to throw error that BREAKS this script, due to not existing?
+				     #$UBUNTU_SNAP_INSTALL epiphany 
+				     
 				     fi
 				     
 				     
